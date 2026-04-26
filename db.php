@@ -30,7 +30,7 @@ $conn->query("CREATE TABLE IF NOT EXISTS tarifas (
     id INT AUTO_INCREMENT PRIMARY KEY,
     nombre VARCHAR(50) NOT NULL,
     tipo_vehiculo ENUM('carro', 'moto', 'camion') NOT NULL,
-    tipo_tarifa ENUM('hora', 'fraccion', 'dia') NOT NULL,
+    tipo_tarifa ENUM('hora', 'fraccion', 'dia', 'semana', 'mensual') NOT NULL,
     monto DECIMAL(10,2) NOT NULL,
     duracion_minutos INT DEFAULT 60,
     activo TINYINT(1) DEFAULT 1,
@@ -348,7 +348,69 @@ function calcularPago($fecha_entrada, $fecha_salida, $tarifa, $tasa_dolar = null
     return [
         'monto_dolar' => round($monto, 2),
         'monto_bs' => round($monto_bs, 2),
-        'tasa' => $tasa_dolar
+        'tasa' => $tasa_dolar,
+        'minutos' => $minutos,
+        'tarifa_usada' => $tarifa['nombre']
+    ];
+}
+
+function calcularPagoAuto($fecha_entrada, $fecha_salida, $tipo_vehiculo, $tarifas, $tasa_dolar = null) {
+    $entrada = new DateTime($fecha_entrada);
+    $salida = new DateTime($fecha_salida);
+    $diff = $salida->diff($entrada);
+    $minutos = ($diff->days * 24 * 60) + ($diff->h * 60) + $diff->i;
+    $horas = ceil($minutos / 60);
+    $dias = ceil($minutos / 1440);
+    
+    $mejorOpcion = null;
+    $mejorPrecio = PHP_FLOAT_MAX;
+    
+    foreach ($tarifas as $tarifa) {
+        if ($tarifa['tipo_vehiculo'] != $tipo_vehiculo) continue;
+        
+        $monto = 0;
+        $tipoT = $tarifa['tipo_tarifa'];
+        
+        if ($tipoT == 'fraccion' && $minutos <= 45) {
+            $fracciones = ceil($minutos / $tarifa['duracion_minutos']);
+            $monto = $fracciones * $tarifa['monto'];
+        } elseif ($tipoT == 'hora') {
+            $monto = $horas * $tarifa['monto'];
+        } elseif ($tipoT == 'dia') {
+            if ($dias <= 1) {
+                $monto = $tarifa['monto'];
+            } else {
+                $monto = $dias * $tarifa['monto'];
+            }
+        } elseif ($tipoT == 'semana') {
+            $semanas = ceil($minutos / (7 * 1440));
+            $monto = $semanas * $tarifa['monto'];
+        } elseif ($tipoT == 'mensual') {
+            $meses = ceil($minutos / (30 * 1440));
+            $monto = $meses * $tarifa['monto'];
+        }
+        
+        if ($monto > 0 && $monto < $mejorPrecio) {
+            $mejorPrecio = $monto;
+            $mejorOpcion = $tarifa;
+        }
+    }
+    
+    if (!$mejorOpcion) {
+        return ['monto_dolar' => 0, 'monto_bs' => 0, 'tasa' => $tasa_dolar, 'minutos' => $minutos, 'tarifa_usada' => 'No encontrada'];
+    }
+    
+    $monto_bs = $mejorPrecio;
+    if ($tasa_dolar && $tasa_dolar > 0) {
+        $monto_bs = $mejorPrecio * $tasa_dolar;
+    }
+    
+    return [
+        'monto_dolar' => round($mejorPrecio, 2),
+        'monto_bs' => round($monto_bs, 2),
+        'tasa' => $tasa_dolar,
+        'minutos' => $minutos,
+        'tarifa_usada' => $mejorOpcion['nombre']
     ];
 }
 

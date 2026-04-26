@@ -617,15 +617,14 @@ small {
 }
 
 @media print {
-    body > * {
+    .no-print {
         display: none !important;
     }
-    body .ticket {
+    .info-box {
+        display: none !important;
+    }
+    .info-box.ticket {
         display: block !important;
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
         border: 2px solid #000;
         padding: 20px;
         text-align: center;

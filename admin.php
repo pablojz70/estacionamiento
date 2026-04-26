@@ -262,9 +262,11 @@ function h($str) {
                     <div class="form-group">
                         <label>Tipo Tarifa</label>
                         <select name="tipo_tarifa">
+                            <option value="fraccion">Fracción (ej: 30 min)</option>
                             <option value="hora">Por Hora</option>
-                            <option value="fraccion">Por Fraccion</option>
-                            <option value="dia">Por Dia</option>
+                            <option value="dia">Por Día</option>
+                            <option value="semana">Por Semana</option>
+                            <option value="mensual">Por Mes</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -295,6 +297,8 @@ function h($str) {
                                 <td><input type="checkbox" name="activo" <?php echo $t['activo']?'checked':''; ?>></td>
                                 <td>
                                     <input type="hidden" name="tarifa_id" value="<?php echo h($t['id']); ?>">
+                                    <input type="hidden" name="tipo_vehiculo" value="<?php echo h($t['tipo_vehiculo']); ?>">
+                                    <input type="hidden" name="tipo_tarifa" value="<?php echo h($t['tipo_tarifa']); ?>">
                                     <button type="submit" name="actualizar_tarifa" class="btn btn-warning btn-sm">Guardar</button>
                                     <button type="submit" name="eliminar_tarifa" class="btn btn-danger btn-sm" onclick="return confirm('Eliminar?')">X</button>
                                 </td>

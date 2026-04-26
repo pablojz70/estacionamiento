@@ -20,8 +20,8 @@ if (!$permisos['ver_cierre_diario'] && !$permisos['ver_reportes_mensuales'] && !
 $message = '';
 $messageType = '';
 
-$fechaActual = date('Y-m-d');
-$mesActual = date('Y-m');
+$fechaActual = $conn->query("SELECT CURDATE() as hoy")->fetch_assoc()['hoy'];
+$mesActual = date('Y-m', strtotime($fechaActual));
 
 $sqlDiario = "SELECT 
     COUNT(*) as total_vehiculos,
@@ -38,16 +38,20 @@ $stmt->execute();
 $resultDiario = $stmt->get_result();
 $reporte = $resultDiario->fetch_assoc();
 
-$sqlPagosFijos = "SELECT COALESCE(SUM(monto), 0) as total_fijos FROM pagos_fijos WHERE fecha_pago = ?";
+$sqlPagosFijos = "SELECT * FROM pagos_fijos WHERE fecha_pago = ? ORDER BY id DESC";
 $stmt = $conn->prepare($sqlPagosFijos);
 $stmt->bind_param("s", $fechaActual);
 $stmt->execute();
 $resultFijos = $stmt->get_result();
-$pagosFijosDia = $resultFijos->fetch_assoc();
+$pagosFijosDia = $resultFijos->fetch_all(MYSQLI_ASSOC);
+$total_fijos_dia = 0;
+$cantidad_fijos = 0;
+foreach ($pagosFijosDia as $pf) {
+    $total_fijos_dia += floatval($pf['monto']);
+    $cantidad_fijos++;
+}
 
-$total_fijos_dia = $pagosFijosDia['total_fijos'];
-
-$sqlVehiculos = "SELECT v.*, u.nombre_completo as empleado, vf.nombre_dueño as dueño_fijo FROM vehiculos v LEFT JOIN usuarios u ON v.id_usuario = u.id LEFT JOIN vehiculos_fijos vf ON v.id_vehiculo_fijo = vf.id WHERE DATE(v.fecha_salida) = ? AND v.status IN ('pagado', 'fijo_salida') ORDER BY v.fecha_salida DESC";
+$sqlVehiculos = "SELECT v.*, u.nombre_completo as empleado, vf.nombre_dueño as dueño_fijo FROM vehiculos v LEFT JOIN usuarios u ON v.id_usuario = u.id LEFT JOIN vehiculos_fijos vf ON v.id_vehiculo_fijo = vf.id WHERE DATE(v.fecha_salida) = ? AND v.status IN ('pagado', 'fijo_salida') AND v.es_fijo = 0 ORDER BY v.fecha_salida DESC";
 $stmt = $conn->prepare($sqlVehiculos);
 $stmt->bind_param("s", $fechaActual);
 $stmt->execute();
@@ -68,6 +72,16 @@ FROM usuarios u
 LEFT JOIN vehiculos v ON u.id = v.id_usuario AND DATE(v.fecha_salida) = ? AND v.status IN ('pagado', 'fijo_salida')
 WHERE u.tipo = 'empleado' AND u.activo = 1
 GROUP BY u.id, u.nombre_completo";
+
+$sqlFijosByUser = "SELECT id_usuario, COUNT(*) as cantidad, SUM(monto) as total FROM pagos_fijos WHERE fecha_pago = ? GROUP BY id_usuario";
+$stmt = $conn->prepare($sqlFijosByUser);
+$stmt->bind_param("s", $fechaActual);
+$stmt->execute();
+$resultFijosByUser = $stmt->get_result();
+$fijosByUser = [];
+while ($row = $resultFijosByUser->fetch_assoc()) {
+    $fijosByUser[$row['id_usuario']] = $row;
+}
 
 $stmt = $conn->prepare($sqlCierreDiario);
 $stmt->bind_param("s", $fechaActual);
@@ -163,13 +177,14 @@ if (isset($_GET['logout'])) {
         <div class="header">
             <img src="imagen/logo.png" alt="Logo" class="logo">
             <h1>ESTACIONAMIENTO</h1>
-            <p>Reportes y Cierre de Caja - <?php echo date("d/m/Y"); ?></p>
+            <p>Reportes y Cierre de Caja - <?php echo date("d/m/Y", strtotime($fechaActual)); ?></p>
         </div>
         
         <div class="user-bar">
             <div class="user-info">
                 <span class="user-name"><?php echo h($nombre_usuario); ?></span>
                 <span class="user-type badge badge-<?php echo h($tipo_usuario); ?>"><?php echo ucfirst(h($tipo_usuario)); ?></span>
+                <span id="fecha_hora" style="margin-left: 15px; font-weight: bold; color: #00d9ff;"></span>
             </div>
             <div class="user-actions">
                 <?php if ($permisos['ver_historial_dolar']): ?>
@@ -220,12 +235,12 @@ if (isset($_GET['logout'])) {
             </div>
             
             <div class="reporte-box mt-20 ticket">
-                    <h3>Reporte de Cierre - <?php echo date("d/m/Y"); ?></h3>
+                    <h3>Reporte de Cierre - <?php echo date("d/m/Y", strtotime($fechaActual)); ?></h3>
                     <div class="grid-2" style="text-align: left;">
                         <div>
                             <p><strong>Vehiculos Normales:</strong> <span class="number"><?php echo h($reporte['normales']); ?></span></p>
-                            <p><strong>Vehiculos Fijos:</strong> <span class="number"><?php echo h($reporte['fijos']); ?></span></p>
-                            <p><strong>Total Atendidos:</strong> <span class="number"><?php echo h($reporte['total_vehiculos']); ?></span></p>
+                            <p><strong>Vehiculos Fijos:</strong> <span class="number"><?php echo $cantidad_fijos; ?></span></p>
+                            <p><strong>Total Atendidos:</strong> <span class="number"><?php echo h($reporte['normales'] + $cantidad_fijos); ?></span></p>
                         </div>
                         <div>
                             <p><strong>Recaudado Normales:</strong> <span class="number" style="color: #48bb78;"><?php echo number_format($reporte['total_recaudado_bs'], 2); ?></span> BS</p>
@@ -244,19 +259,21 @@ if (isset($_GET['logout'])) {
                         <tr>
                             <th>Empleado</th>
                             <th>Normales</th>
-                            <th>Fijos</th>
+                            <th>Cuotas Fijas</th>
                             <th>Total</th>
                             <th>Recaudado (BS)</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php while ($row = $resultCierreDiario->fetch_assoc()): ?>
+                        <?php while ($row = $resultCierreDiario->fetch_assoc()): 
+                            $fijosUser = $fijosByUser[$row['id']] ?? ['cantidad' => 0, 'total' => 0];
+                        ?>
                             <tr>
                                 <td><?php echo h($row['nombre_completo']); ?></td>
                                 <td><strong><?php echo h($row['total_normales_count']); ?></strong></td>
-                                <td><strong><?php echo h($row['total_fijos_count']); ?></strong></td>
-                                <td><strong><?php echo h($row['total_vehiculos']); ?></strong></td>
-                                <td style="color: #48bb78; font-weight: bold;"><?php echo number_format($row['total_normales'], 2); ?></td>
+                                <td><strong><?php echo h($fijosUser['cantidad']); ?></strong></td>
+                                <td><strong><?php echo h($row['total_normales_count'] + $fijosUser['cantidad']); ?></strong></td>
+                                <td style="color: #48bb78; font-weight: bold;"><?php echo number_format($row['total_normales'] + $fijosUser['total'], 2); ?></td>
                             </tr>
                         <?php endwhile; ?>
                     </tbody>
@@ -294,6 +311,40 @@ if (isset($_GET['logout'])) {
                     </table>
                 <?php else: ?>
                     <p class="text-center" style="color: #a0aec0; padding: 20px;">No hay vehiculos pagados en el dia de hoy</p>
+                <?php endif; ?>
+            </div>
+            
+            <div class="card">
+                <h2>Cuotas Fijas Cobradas</h2>
+                <?php if (count($pagosFijosDia) > 0): ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Placa</th>
+                                <th>Tipo Vehículo</th>
+                                <th>Dueño</th>
+                                <th>Tipo Cuota</th>
+                                <th>Monto</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php 
+                            $connTemp = $conn;
+                            foreach ($pagosFijosDia as $pf): 
+                                $vfInfo = $connTemp->query("SELECT vf.placa, vf.tipo_vehiculo, vf.nombre_dueño FROM vehiculos_fijos vf WHERE vf.id = " . intval($pf['id_vehiculo_fijo']))->fetch_assoc();
+                            ?>
+                                <tr>
+                                    <td><strong><?php echo h($vfInfo['placa'] ?? 'N/A'); ?></strong></td>
+                                    <td><span class="badge badge-<?php echo h($vfInfo['tipo_vehiculo'] ?? 'carro'); ?>"><?php echo ucfirst(h($vfInfo['tipo_vehiculo'] ?? 'carro')); ?></span></td>
+                                    <td><?php echo h($vfInfo['nombre_dueño'] ?? 'N/A'); ?></td>
+                                    <td><span class="badge badge-primary"><?php echo ucfirst(h($pf['tipo_cuota'])); ?></span></td>
+                                    <td style="color: #48bb78; font-weight: bold;"><?php echo number_format($pf['monto'], 2); ?> BS</td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <p class="text-center" style="color: #a0aec0; padding: 20px;">No hay cuotas fijas cobradas en el dia de hoy</p>
                 <?php endif; ?>
             </div>
         </div>
@@ -417,5 +468,19 @@ if (isset($_GET['logout'])) {
             </div>
         </div>
     </div>
+    <script>
+        function actualizarFechaHora() {
+            var ahora = new Date();
+            var dia = String(ahora.getDate()).padStart(2, '0');
+            var mes = String(ahora.getMonth() + 1).padStart(2, '0');
+            var anio = ahora.getFullYear();
+            var horas = String(ahora.getHours()).padStart(2, '0');
+            var minutos = String(ahora.getMinutes()).padStart(2, '0');
+            var segundos = String(ahora.getSeconds()).padStart(2, '0');
+            document.getElementById('fecha_hora').textContent = dia + '/' + mes + '/' + anio + ' ' + horas + ':' + minutos + ':' + segundos;
+        }
+        actualizarFechaHora();
+        setInterval(actualizarFechaHora, 1000);
+    </script>
 </body>
 </html>
